@@ -205,13 +205,15 @@ app.post('/resendEmails', async (req, res) => {
 
 //Send a campaign
 
-app.post('/sendEmails', async (req,res) => {
+app.get('/sendEmails/:campaignId', async (req,res) => {
     try{
-        const {campaignId} = req.body;
+        // const {campaignId} = req.body;
+        let {campaignId} = req.params
+        console.log(campaignId);
     
         const newCampaignId = await mailchimp.campaigns.send(campaignId);
     
-        res.status(200).json({'campaignId': newCampaignId})
+        res.status(200).json({message: 'Emails sent'});
     }
     catch(error){
         console.log(error);
