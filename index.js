@@ -3,6 +3,7 @@ const express = require('express');
 const mailchimp = require('@mailchimp/mailchimp_marketing');
 var Airtable = require('airtable');
 const bodyParser = require('body-parser');
+const res = require('express/lib/response');
 
 //Initializing express application
 const app = express();
@@ -80,37 +81,29 @@ const getReport = async () => {
 
     //Perform operations for each Campaign in the list
     campaignIds.campaigns.forEach(async (campaignId) => {
-        
+
         //Get detailed information for each campaign
         const response = await mailchimp.campaigns.get(
             campaignId.id,
-            {'fields': ['id', 'create_time', 'emails_sent' ,'send_time', 'resendable', 'recipients.list_id', 'settings.subject_line', 'report_summary.opens','status']},
+            { 'fields': ['id', 'create_time', 'emails_sent', 'send_time', 'resendable', 'recipients.list_id', 'settings.subject_line', 'report_summary.unique_opens', 'status'] },
         );
 
         //Get emails of all recipients for the campaign
         const listMembers = await mailchimp.lists.getListMembersInfo(
             response.recipients.list_id,
-            {'fields': ['members.email_address','members.stats.avg_open_rate']}
-            );
+            { 'fields': ['members.email_address', 'members.stats.avg_open_rate'] }
+        );
+        let recipients = listMembers.members.map((recipient) => recipient.email_address);
+        recipients = recipients.join(',');
+        // console.log(recipients);
 
         //Get list of recipients who have opened the campaign email
-        const openedRecipients = await mailchimp.reports.getCampaignOpenDetails(
+        let openedRecipients = await mailchimp.reports.getCampaignOpenDetails(
             campaignId.id,
-            {'fields': ['members.email_address']}
-            );
-        // console.log(openedRecipients);
-
-        //Add 'opened' field for each recipient
-        listMembers.members.forEach((member) => {
-            
-            for(let i = 0; i < openedRecipients.members.length; i++){
-                if(member.email_address === openedRecipients.members[i].email_address){
-                    member.opened = true;
-                    continue;
-                }
-                member.opened = false;
-            }
-        });
+            { 'fields': ['members.email_address'] }
+        );
+        let opened = openedRecipients.members.map((recipient) => recipient.email_address);
+        opened = opened.join(',');
 
         // Final response example
         // {
@@ -123,35 +116,34 @@ const getReport = async () => {
         //     settings: { subject_line: 'Mailchimp test' },
         //     report_summary: { opens: 0 }
         // }
+        // console.log(response);
 
         response.recipients = listMembers;
 
         //
-        const createTime = new Date(response.create_time).toDateString();
-        const sendTime = new Date(response.send_time).toDateString();
+        const createTime = Date(response.create_time) ? new Date(response.create_time).toDateString() : '';
+        const sendTime = response.send_time ? new Date(response.create_time).toDateString() : '';
 
         //Create and modify object as required by Airtable API 
         const records = [];
 
-        for (let recipient of response.recipients.members) {
-            const currentRecipientObject = {};
-            // console.log(recipient);
+        const currentRecipientObject = {};
+        // console.log(recipient);
 
-            currentRecipientObject["Campaign ID"] = response.id;
-            currentRecipientObject['Status'] = response['status'];
-            currentRecipientObject["Emails sent"] = response['emails_sent'];
-            currentRecipientObject["Emails opened"] = response['report_summary'].opens;
-            currentRecipientObject["Email subject"] = response['settings'].subject_line;
-            currentRecipientObject["Create time"] = createTime;
-            currentRecipientObject["Send time"] = sendTime;
-            currentRecipientObject["Recipient email"] = recipient.email_address;
-            currentRecipientObject["Opened"] = recipient.opened.toString();
+        currentRecipientObject["Campaign ID"] = response.id;
+        currentRecipientObject['Status'] = response['status'];
+        currentRecipientObject["Emails sent"] = response['emails_sent'];
+        currentRecipientObject["Emails opened"] = response['report_summary'] ? response['report_summary'].unique_opens : 0;
+        currentRecipientObject["Email subject"] = response['settings'].subject_line || '';
+        currentRecipientObject["Create time"] = createTime;
+        currentRecipientObject["Send time"] = sendTime;
+        currentRecipientObject["Recipients"] = recipients ? recipients : '';
+        currentRecipientObject["Opened"] = opened ? opened : '';
 
-            const temporaryObject = {};
-            temporaryObject['fields'] = currentRecipientObject;
+        const temporaryObject = {};
+        temporaryObject['fields'] = currentRecipientObject;
 
-            records.push(temporaryObject);
-        }
+        records.push(temporaryObject);
 
         // Airtable API call to push records to base
         base(AIRTABLE_TABLE_NAME).create(
@@ -172,9 +164,16 @@ const getReport = async () => {
 
 // 1-Get reports
 app.get('/getReport', async (req, res) => {
-    const records = await getReport();
+    try {
+        await getReport();
 
-    res.status(200).send(records);
+        res.status(200).json({ message: 'Updating your records' });
+    }
+    catch (error) {
+        console.log(error);
+        res.status(503).json({ message: "An error occured" });
+    }
+
 });
 
 
@@ -200,6 +199,23 @@ app.post('/resendEmails', async (req, res) => {
     catch (error) {
         console.log(error);
         res.status(503).json({ message: 'Error processing your request' });
+    }
+});
+
+
+//Send a campaign
+
+app.post('/sendEmails', async (req,res) => {
+    try{
+        const {campaignId} = req.body;
+    
+        const newCampaignId = await mailchimp.campaigns.send(campaignId);
+    
+        res.status(200).json({'campaignId': newCampaignId})
+    }
+    catch(error){
+        console.log(error);
+        res.status(503).json({message: 'An error occured'})
     }
 });
 
