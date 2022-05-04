@@ -3,7 +3,8 @@ const express = require('express');
 const mailchimp = require('@mailchimp/mailchimp_marketing');
 var Airtable = require('airtable');
 const bodyParser = require('body-parser');
-const res = require('express/lib/response');
+const fs = require('fs');
+var url = require('url');
 
 //Initializing express application
 const app = express();
@@ -160,6 +161,26 @@ const getReport = async () => {
     });
 };
 
+const deleteRecords = async () => {
+    let response = await base('Mailchimp').select({
+        // Selecting the first 10 records in Grid view:
+        maxRecords: 10,
+        view: "Grid view"
+    }).eachPage(function page(records, fetchNextPage) {
+        // This function (`page`) will get called for each page of records.
+        records.forEach(async function (record) {
+            await base('Mailchimp').destroy(record.id);
+        });            
+            // To fetch the next page of records, call `fetchNextPage`.
+        // If there are more records, `page` will get called again.
+        // If there are no more records, `done` will get called.
+        fetchNextPage();
+
+    }, function done(err) {
+        if (err) { console.error(err); return; }
+    });
+}
+
 //ROUTES
 
 // 1-Get reports
@@ -205,20 +226,133 @@ app.post('/resendEmails', async (req, res) => {
 
 //Send a campaign
 
-app.get('/sendEmails/:campaignId', async (req,res) => {
-    try{
-        // const {campaignId} = req.body;
-        let {campaignId} = req.params
-        console.log(campaignId);
-    
-        const newCampaignId = await mailchimp.campaigns.send(campaignId);
-    
-        res.status(200).json({message: 'Emails sent'});
+app.post('/sendEmails', async (req, res) => {
+
+    //Create Email template
+    const { ListId, SegmentId, templateId, subjectLine, previewText, campaignTitle, fromName, replyTo } = req.body
+    console.log(SegmentId);
+    const createCampaign = async () => {
+        try {
+
+            const requestBody = {
+                type: "regular",
+                recipients: {
+                    list_id: ListId
+                },
+                settings: {
+                    subject_line: subjectLine,
+                    preview_text: previewText,
+                    title: campaignTitle,
+                    from_name: fromName,
+                    reply_to: replyTo,
+                    template_id: templateId,
+                    to_name: "*|FNAME|*",
+                    auto_footer: true,
+                    inline_css: true,
+                }
+            }
+
+            if(SegmentId){
+                requestBody[recipients].segment_opts = {
+                    saved_segment_id: SegmentId,
+                    match: 'any'
+                }
+            }
+            console.log(requestBody);
+
+            const campaign = await mailchimp.campaigns.create(requestBody)
+            return campaign.id
+        }
+        catch (err) {
+            res.status(400).send(err)
+        }
     }
-    catch(error){
-        console.log(error);
-        res.status(503).json({message: 'An error occured'})
+
+    const sendCampaign = async (campaignId) => {
+        try {
+            // const {campaignId} = req.body;
+    
+            // let { campaignId } = req.params
+            console.log(campaignId);
+    
+            const newCampaignId = await mailchimp.campaigns.send(campaignId);
+    
+            console.log(newCampaignId)
+            if (newCampaignId.status === 200) {
+    
+                deleteRecords();
+    
+                getReport();
+            }
+    
+            res.status(200).json({ message: 'Emails sent' });
+        }
+        catch (error) {
+            console.log(error);
+            res.status(503).json({ message: 'An error occured' })
+        }
     }
+
+    const campaignId = await createCampaign();
+    sendCampaign(campaignId);
+    console.log(campaignId);
 });
+
+
+app.post('/createTemplate', async (req,res) => {
+    const { templateName } = req.body
+
+    const createTemplate = async (err, htmlTemplate) => {
+        if (err) {
+            res.status(400).json({message:"An error occured while reading template html file!"})
+        }
+        try {
+            const template = await mailchimp.templates.create({
+                name: templateName,
+                html: htmlTemplate
+            })
+            res.status(200).json({template});
+        }
+        catch (err) {
+            res.status(400).send(err)
+        }
+    }
+
+    fs.readFile('./template.html', 'utf8', createTemplate);
+});
+
+// app.post('/sendEmails2', async (req,res) => {
+//     try {
+//         const {campaignId} = req.body;
+//         console.log(req.body);
+//         console.log(req.params);
+//         // console.log(req);
+//         console.log(req.query);
+//         console.log(req.url);
+//         var url_parts = url.parse(req.url, true);
+//         var query = url_parts.query;
+//         console.log(query);
+
+
+//         // let { campaignId } = req.params
+//         console.log(campaignId);
+
+//         const newCampaignId = await mailchimp.campaigns.send(campaignId);
+
+//         console.log(newCampaignId)
+//         if (newCampaignId.status === 200) {
+
+//             deleteRecords();
+
+//             getReport();
+//         }
+
+//         res.status(200).json({ message: 'Emails sent' });
+//     }
+//     catch (error) {
+//         console.log(error);
+//         res.status(503).json({ message: 'An error occured' })
+//     }
+// });
 
 app.listen(PORT, () => console.log('Server listening on port: ' + PORT));
